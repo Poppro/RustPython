@@ -29,7 +29,7 @@ pub enum JitArgumentError {
 
 struct Jit {
     builder_context: FunctionBuilderContext,
-    ctx: codegen::Context,
+    ctx: cranelift_codegen::Context,
     module: JITModule,
 }
 

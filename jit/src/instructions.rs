@@ -122,13 +122,11 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         match val {
             JitValue::Float(val) => {
                 let zero = self.builder.ins().f64const(0);
-                let val = self.builder.ins().fcmp(FloatCC::NotEqual, val, zero);
-                Ok(self.builder.ins().bint(types::I8, val))
+                Ok(self.builder.ins().fcmp(FloatCC::NotEqual, val, zero))
             }
             JitValue::Int(val) => {
                 let zero = self.builder.ins().iconst(types::I64, 0);
-                let val = self.builder.ins().icmp(IntCC::NotEqual, val, zero);
-                Ok(self.builder.ins().bint(types::I8, val))
+                Ok(self.builder.ins().icmp(IntCC::NotEqual, val, zero))
             }
             JitValue::Bool(val) => Ok(val),
             JitValue::None => Ok(self.builder.ins().iconst(types::I8, 0)),
@@ -155,6 +153,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         // label_targets alone
         let label_targets = bytecode.label_targets();
 
+        println!("JIT Compile");
+
         let mut arg_state = OpArgState::default();
         for (offset, instruction) in bytecode.instructions.iter().enumerate() {
             let (instruction, arg) = arg_state.get(*instruction);
@@ -164,18 +164,19 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
                 // If the current block is not terminated/filled just jump
                 // into the new block.
-                if !self.builder.is_filled() {
-                    self.builder.ins().jump(block, &[]);
-                }
+                // if !self.builder.func.layout.block {
+                //     self.builder.ins().jump(block, &[]);
+                // }
+                self.builder.ins().jump(block, &[]);
 
                 self.builder.switch_to_block(block);
             }
 
             // Sometimes the bytecode contains instructions after a return
             // just ignore those until we are at the next label
-            if self.builder.is_filled() {
-                continue;
-            }
+            // if self.builder.is_filled() {
+            //     continue;
+            // }
 
             self.add_instruction(instruction, arg, &bytecode.constants)?;
         }
@@ -226,13 +227,9 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                 let cond = self.stack.pop().ok_or(JitCompileError::BadBytecode)?;
 
                 let val = self.boolean_val(cond)?;
-                let then_block = self.get_or_create_block(target.get(arg));
-                self.builder.ins().brz(val, then_block, &[]);
-
+                let else_block = self.get_or_create_block(target.get(arg));
                 let block = self.builder.create_block();
-                self.builder.ins().jump(block, &[]);
-                self.builder.switch_to_block(block);
-
+                self.builder.ins().brif(val, block, &[], else_block, &[]);
                 Ok(())
             }
             Instruction::JumpIfTrue { target } => {
@@ -240,12 +237,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
                 let val = self.boolean_val(cond)?;
                 let then_block = self.get_or_create_block(target.get(arg));
-                self.builder.ins().brnz(val, then_block, &[]);
-
-                let block = self.builder.create_block();
-                self.builder.ins().jump(block, &[]);
-                self.builder.switch_to_block(block);
-
+                let else_block = self.builder.create_block();
+                self.builder
+                    .ins()
+                    .brif(val, then_block, &[], else_block, &[]);
                 Ok(())
             }
             Instruction::Jump { target } => {
@@ -343,9 +338,7 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                         };
 
                         let val = self.builder.ins().icmp(cond, operand_one, operand_two);
-                        // TODO: Remove this `bint` in cranelift 0.90 as icmp now returns i8
-                        self.stack
-                            .push(JitValue::Bool(self.builder.ins().bint(types::I8, val)));
+                        self.stack.push(JitValue::Bool(val));
                         Ok(())
                     }
                     (JitValue::Float(a), JitValue::Float(b)) => {
@@ -358,10 +351,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
                             ComparisonOperator::GreaterOrEqual => FloatCC::GreaterThanOrEqual,
                         };
 
-                        let val = self.builder.ins().fcmp(cond, a, b);
-                        // TODO: Remove this `bint` in cranelift 0.90 as fcmp now returns i8
                         self.stack
-                            .push(JitValue::Bool(self.builder.ins().bint(types::I8, val)));
+                            .push(JitValue::Bool(self.builder.ins().fcmp(cond, a, b)));
                         Ok(())
                     }
                     _ => Err(JitCompileError::NotSupported),
@@ -403,12 +394,10 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
 
                 let val = match (op, a, b) {
                     (BinaryOperator::Add, JitValue::Int(a), JitValue::Int(b)) => {
-                        let (out, carry) = self.builder.ins().iadd_ifcout(a, b);
-                        self.builder.ins().trapif(
-                            IntCC::Overflow,
-                            carry,
-                            TrapCode::IntegerOverflow,
-                        );
+                        let out =
+                            self.builder
+                                .ins()
+                                .uadd_overflow_trap(a, b, TrapCode::IntegerOverflow);
                         JitValue::Int(out)
                     }
                     (BinaryOperator::Subtract, JitValue::Int(a), JitValue::Int(b)) => {
@@ -515,10 +504,8 @@ impl<'a, 'b> FunctionCompiler<'a, 'b> {
         //     .trapif(IntCC::Overflow, carry, TrapCode::IntegerOverflow);
         // TODO: this shouldn't wrap
         let neg_b = self.builder.ins().ineg(b);
-        let (out, carry) = self.builder.ins().iadd_ifcout(a, neg_b);
-        self.builder
-            .ins()
-            .trapif(IntCC::Overflow, carry, TrapCode::IntegerOverflow);
+        let (out, carry) = self.builder.ins().sadd_overflow(a, neg_b);
+        self.builder.ins().trapnz(carry, TrapCode::IntegerOverflow);
         out
     }
 }

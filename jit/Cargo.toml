@@ -15,9 +15,10 @@ rustpython-compiler-core = { workspace = true }
 num-traits = { workspace = true }
 thiserror = { workspace = true }
 
-cranelift = "0.88.0"
-cranelift-jit = "0.88.0"
-cranelift-module = "0.88.0"
+cranelift = "0.106.1"
+cranelift-jit = "0.106.1"
+cranelift-module = "0.106.1"
+cranelift-codegen = "0.106.1"
 libffi = "3.1.0"
 
 [dev-dependencies]
